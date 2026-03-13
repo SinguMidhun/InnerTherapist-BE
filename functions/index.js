@@ -12,23 +12,21 @@ initializeApp();
 const db = getFirestore();
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 setGlobalOptions({ maxInstances: 10 });
 
 async function analyseJournalWithGemini(journalText) {
     const prompt = `You are a compassionate and insightful therapist. A user has written the following journal entry. Please:
-1. Provide a brief emotional summary of how the user seems to be feeling.
-2. Identify key themes or patterns in their writing.
-3. Suggest 2-3 actionable steps or coping strategies they could try.
+1. Provide a brief emotional summary and analysis of how the user seems to be feeling.
+2. Suggest 2-3 actionable steps or coping strategies they could try.
 
 Journal Entry:
 "${journalText}"
 
 Respond in JSON format with the following structure:
 {
-  "emotionalSummary": "...",
-  "themes": ["...", "..."],
+  "aiResponse": "...",
   "actionItems": ["...", "...", "..."]
 }`;
 
@@ -69,8 +67,8 @@ exports.onJournalCreated = onDocumentCreated(
         logger.info(`New journal created for user: ${uid}, journalId: ${journalId}`);
 
         try {
-            const aiAnalysis = await analyseJournalWithGemini(journalText);
-            logger.info("Gemini analysis received", { aiAnalysis });
+            const aiResult = await analyseJournalWithGemini(journalText);
+            logger.info("Gemini analysis received", { aiResult });
 
             await db
                 .collection("Users")
@@ -78,7 +76,8 @@ exports.onJournalCreated = onDocumentCreated(
                 .collection("journal")
                 .doc(journalId)
                 .update({
-                    aiAnalysis: aiAnalysis,
+                    aiResponse: aiResult.aiResponse,
+                    actionItems: aiResult.actionItems,
                     analysedAt: new Date(),
                 });
 
