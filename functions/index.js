@@ -16,7 +16,7 @@ const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
 const getGeminiUrl = () => {
     // Falls back to .env variable for local development
-    const key = process.env.GEMINI_API_KEY || geminiApiKey.value();
+    const key = process.env.GEMINI_SECRET || geminiApiKey.value();
     return `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 };
 
