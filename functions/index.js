@@ -1,8 +1,8 @@
 require("dotenv").config();
 
-const { setGlobalOptions } = require("firebase-functions");
 const { onRequest } = require("firebase-functions/https");
 const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { getFirestore } = require("firebase-admin/firestore");
 const { initializeApp } = require("firebase-admin/app");
@@ -11,10 +11,14 @@ const axios = require("axios");
 initializeApp();
 const db = getFirestore();
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+// Define secret for production
+const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
-setGlobalOptions({ maxInstances: 10 });
+const getGeminiUrl = () => {
+    // Falls back to .env variable for local development
+    const key = process.env.GEMINI_API_KEY || geminiApiKey.value();
+    return `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
+};
 
 async function analyseJournalWithGemini(journalText) {
     const prompt = `You are a compassionate and insightful therapist. A user has written the following journal entry. Please:
@@ -30,7 +34,7 @@ Respond in JSON format with the following structure:
   "actionItems": ["...", "...", "..."]
 }`;
 
-    const response = await axios.post(GEMINI_API_URL, {
+    const response = await axios.post(getGeminiUrl(), {
         contents: [
             {
                 parts: [{ text: prompt }],
@@ -45,13 +49,11 @@ Respond in JSON format with the following structure:
     return JSON.parse(aiText);
 }
 
-exports.helloWorld = onRequest((request, response) => {
-    logger.info("Hello logs!", { structuredData: true });
-    response.send("Hello from Midhun Singu!");
-});
-
 exports.onJournalCreated = onDocumentCreated(
-    "Users/{uid}/journal/{journalId}",
+    {
+        document: "Users/{uid}/journal/{journalId}",
+        secrets: [geminiApiKey],
+    },
     async (event) => {
         const snapshot = event.data;
         if (!snapshot) {
