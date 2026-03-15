@@ -5,11 +5,13 @@ const { onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { getFirestore } = require("firebase-admin/firestore");
+const { getDatabase } = require("firebase-admin/database");
 const { initializeApp } = require("firebase-admin/app");
 const axios = require("axios");
 
 initializeApp();
 const db = getFirestore();
+const rtdb = getDatabase();
 
 // Define secret for production
 const geminiApiKey = defineSecret("GEMINI_API_KEY");
@@ -23,7 +25,7 @@ const getGeminiUrl = () => {
 async function analyseJournalWithGemini(journalText) {
     const prompt = `You are a compassionate and insightful therapist. A user has written the following journal entry. Please:
 1. Provide a personalized response directly to the user based on their journal entry, strictly keeping it to 30 words or less.
-2. Provide a detailed brief summary of the journal entry, without any word limit.
+2. Provide a detailed brief summary of the journal entry, without any word limit. The summary MUST explicitly capture any situations mentioned (e.g., going to a movie, party) and people mentioned (e.g., friends, family, colleagues), along with the feelings associated with them.
 3. Suggest 2-3 actionable steps or coping strategies they could try.
 
 Journal Entry:
@@ -45,6 +47,29 @@ Respond in JSON format with the following structure:
         generationConfig: {
             responseMimeType: "application/json",
         },
+    });
+
+    const aiText = response.data.candidates[0].content.parts[0].text;
+    return JSON.parse(aiText);
+}
+
+async function analyseSereneSessionWithGemini(messages) {
+    const conversationText = messages.map(m => `[${m.date}] ${m.sender}: ${m.content}`).join("\n");
+    const prompt = `You are a professional therapist analyzing a recent conversation with a user.
+Please read the following conversation log and provide a detailed summary emphasizing the user's behavior and mental health patterns. Ignore small talk or standard greetings. 
+The summary MUST explicitly capture any situations discussed (e.g., going to a movie, party) and people mentioned (e.g., friends, family, colleagues), along with the user's feelings associated with them.
+
+Conversation:
+${conversationText}
+
+Respond in JSON format with the following structure:
+{
+  "summary": "..."
+}`;
+
+    const response = await axios.post(getGeminiUrl(), {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" },
     });
 
     const aiText = response.data.candidates[0].content.parts[0].text;
@@ -89,6 +114,82 @@ exports.onJournalCreated = onDocumentCreated(
             logger.info(`AI analysis saved for journal ${journalId} of user ${uid}`);
         } catch (error) {
             logger.error("Error calling Gemini API", {
+                error: error.message,
+                response: error.response?.data,
+            });
+        }
+
+        return null;
+    },
+);
+
+exports.sereneSession = onDocumentCreated(
+    {
+        document: "Users/{uid}/serene_sessions/{doc_id}",
+        secrets: [geminiApiKey],
+    },
+    async (event) => {
+        const snapshot = event.data;
+        if (!snapshot) {
+            logger.warn("No data associated with the event");
+            return null;
+        }
+
+        const sessionData = snapshot.data();
+
+        if (sessionData.status !== "ended") {
+            return null;
+        }
+
+        if (sessionData.id === null || sessionData.id === undefined || sessionData.id === "") {
+            return null;
+        }
+
+        if (sessionData.messageCount === undefined || sessionData.messageCount < 4) {
+            return null;
+        }
+
+        const uid = event.params.uid;
+        const doc_id = event.params.doc_id;
+
+        logger.info(`Valid serene session ended for user: ${uid}, doc_id: ${doc_id}`);
+
+        try {
+            const messagesRef = rtdb.ref(`/serene_messages/${uid}/${sessionData.id}`);
+            const messagesSnapshot = await messagesRef.orderByChild("date").once("value");
+
+            if (messagesSnapshot.exists()) {
+                const messages = [];
+                messagesSnapshot.forEach((childSnapshot) => {
+                    const msg = childSnapshot.val();
+                    messages.push({
+                        sender: msg.sender,
+                        content: msg.content,
+                        date: msg.date,
+                    });
+                });
+
+                logger.info(`Fetched ${messages.length} messages for session ${sessionData.id}`);
+
+                const aiResult = await analyseSereneSessionWithGemini(messages);
+                logger.info("Gemini serene session analysis received", { aiResult });
+
+                await db
+                    .collection("Users")
+                    .doc(uid)
+                    .collection("serene_sessions")
+                    .doc(doc_id)
+                    .update({
+                        summary: aiResult.summary,
+                        analysedAt: new Date(),
+                    });
+
+                logger.info(`AI analysis saved for serene session ${doc_id} of user ${uid}`);
+            } else {
+                logger.info(`No messages found for session ${sessionData.id}`);
+            }
+        } catch (error) {
+            logger.error(`Error processing serene session ${sessionData.id}`, {
                 error: error.message,
                 response: error.response?.data,
             });
