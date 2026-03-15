@@ -22,8 +22,9 @@ const getGeminiUrl = () => {
 
 async function analyseJournalWithGemini(journalText) {
     const prompt = `You are a compassionate and insightful therapist. A user has written the following journal entry. Please:
-1. Provide a brief emotional summary and analysis of how the user seems to be feeling.
-2. Suggest 2-3 actionable steps or coping strategies they could try.
+1. Provide a personalized response directly to the user based on their journal entry, strictly keeping it to 30 words or less.
+2. Provide a detailed brief summary of the journal entry, without any word limit.
+3. Suggest 2-3 actionable steps or coping strategies they could try.
 
 Journal Entry:
 "${journalText}"
@@ -31,6 +32,7 @@ Journal Entry:
 Respond in JSON format with the following structure:
 {
   "aiResponse": "...",
+  "summary": "...",
   "actionItems": ["...", "...", "..."]
 }`;
 
@@ -79,6 +81,7 @@ exports.onJournalCreated = onDocumentCreated(
                 .doc(journalId)
                 .update({
                     aiResponse: aiResult.aiResponse,
+                    summary: aiResult.summary,
                     actionItems: aiResult.actionItems,
                     analysedAt: new Date(),
                 });
