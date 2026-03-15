@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 const { onRequest } = require("firebase-functions/https");
-const { onDocumentCreated } = require("firebase-functions/v2/firestore");
+const { onDocumentWritten } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { getFirestore } = require("firebase-admin/firestore");
@@ -76,14 +76,14 @@ Respond in JSON format with the following structure:
     return JSON.parse(aiText);
 }
 
-exports.onJournalCreated = onDocumentCreated(
+exports.onJournalCreated = onDocumentWritten(
     {
         document: "Users/{uid}/journal/{journalId}",
         secrets: [geminiApiKey],
     },
     async (event) => {
-        const snapshot = event.data;
-        if (!snapshot) {
+        const snapshot = event.data.after;
+        if (!snapshot || !snapshot.exists) {
             logger.warn("No data associated with the event");
             return null;
         }
@@ -91,6 +91,17 @@ exports.onJournalCreated = onDocumentCreated(
         const uid = event.params.uid;
         const journalId = event.params.journalId;
         const journalData = snapshot.data();
+
+        if (journalData.therapyDone) {
+            return null;
+        }
+
+        const retryCount = journalData.retryCount || 0;
+        if (retryCount > 3) {
+            logger.warn(`Max retries reached for journal ${journalId}`);
+            return null;
+        }
+
         const journalText = journalData.text || journalData.content || JSON.stringify(journalData);
 
         logger.info(`New journal created for user: ${uid}, journalId: ${journalId}`);
@@ -109,6 +120,7 @@ exports.onJournalCreated = onDocumentCreated(
                     summary: aiResult.summary,
                     actionItems: aiResult.actionItems,
                     analysedAt: new Date(),
+                    therapyDone: true,
                 });
 
             logger.info(`AI analysis saved for journal ${journalId} of user ${uid}`);
@@ -117,25 +129,43 @@ exports.onJournalCreated = onDocumentCreated(
                 error: error.message,
                 response: error.response?.data,
             });
+            await db
+                .collection("Users")
+                .doc(uid)
+                .collection("journal")
+                .doc(journalId)
+                .update({
+                    retryCount: (journalData.retryCount || 0) + 1,
+                });
         }
 
         return null;
     },
 );
 
-exports.sereneSession = onDocumentCreated(
+exports.sereneSession = onDocumentWritten(
     {
         document: "Users/{uid}/serene_sessions/{doc_id}",
         secrets: [geminiApiKey],
     },
     async (event) => {
-        const snapshot = event.data;
-        if (!snapshot) {
+        const snapshot = event.data.after;
+        if (!snapshot || !snapshot.exists) {
             logger.warn("No data associated with the event");
             return null;
         }
 
         const sessionData = snapshot.data();
+
+        if (sessionData.therapyDone) {
+            return null;
+        }
+
+        const retryCount = sessionData.retryCount || 0;
+        if (retryCount > 3) {
+            logger.warn(`Max retries reached for serene session ${sessionData.id}`);
+            return null;
+        }
 
         if (sessionData.status !== "ended") {
             return null;
@@ -182,17 +212,35 @@ exports.sereneSession = onDocumentCreated(
                     .update({
                         summary: aiResult.summary,
                         analysedAt: new Date(),
+                        therapyDone: true,
                     });
 
                 logger.info(`AI analysis saved for serene session ${doc_id} of user ${uid}`);
             } else {
                 logger.info(`No messages found for session ${sessionData.id}`);
+                await db
+                    .collection("Users")
+                    .doc(uid)
+                    .collection("serene_sessions")
+                    .doc(doc_id)
+                    .update({
+                        analysedAt: new Date(),
+                        therapyDone: true,
+                    });
             }
         } catch (error) {
             logger.error(`Error processing serene session ${sessionData.id}`, {
                 error: error.message,
                 response: error.response?.data,
             });
+            await db
+                .collection("Users")
+                .doc(uid)
+                .collection("serene_sessions")
+                .doc(doc_id)
+                .update({
+                    retryCount: (sessionData.retryCount || 0) + 1,
+                });
         }
 
         return null;
