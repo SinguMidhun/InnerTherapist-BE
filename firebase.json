@@ -21,10 +21,10 @@
       "port": 5001
     },
     "firestore": {
-      "port": 8083
+      "port": 8086
     },
     "pubsub": {
-      "port": 8082
+      "port": 8089
     },
     "ui": {
       "enabled": true

@@ -18,6 +18,7 @@ const rtdb = getDatabase();
 
 // Define secret for production
 const geminiApiKey = defineSecret("GEMINI_API_KEY");
+const qdrantApiKey = defineSecret("QDRANT_API_KEY");
 
 const getGeminiUrl = () => {
     const key = process.env.GEMINI_SECRET || geminiApiKey.value();
@@ -81,7 +82,7 @@ Respond in JSON format with the following structure:
 exports.onJournalCreated = onDocumentWritten(
     {
         document: "Users/{uid}/journal/{journalId}",
-        secrets: [geminiApiKey],
+        secrets: [geminiApiKey, qdrantApiKey],
     },
     async (event) => {
         const snapshot = event.data.after;
@@ -94,7 +95,7 @@ exports.onJournalCreated = onDocumentWritten(
         const journalId = event.params.journalId;
         const journalData = snapshot.data();
 
-        if (journalData.therapyDone) {
+        if (journalData.analysisDone) {
             return null;
         }
 
@@ -123,7 +124,7 @@ exports.onJournalCreated = onDocumentWritten(
                     summary: aiResult.summary,
                     actionItems: aiResult.actionItems,
                     analysedAt: new Date(),
-                    therapyDone: true,
+                    analysisDone: true,
                 });
 
             logger.info(`AI analysis saved for journal ${journalId} of user ${uid}`);
@@ -154,7 +155,7 @@ exports.onJournalCreated = onDocumentWritten(
 exports.sereneSession = onDocumentWritten(
     {
         document: "Users/{uid}/serene_sessions/{doc_id}",
-        secrets: [geminiApiKey],
+        secrets: [geminiApiKey, qdrantApiKey],
     },
     async (event) => {
         const snapshot = event.data.after;
@@ -166,7 +167,7 @@ exports.sereneSession = onDocumentWritten(
         const before = event.data.before?.data();
         const sessionData = snapshot.data();
 
-        if (sessionData.therapyDone) {
+        if (sessionData.analysisDone) {
             return null;
         }
 
@@ -225,7 +226,7 @@ exports.sereneSession = onDocumentWritten(
                     .update({
                         summary,
                         analysedAt: new Date(),
-                        therapyDone: true,
+                        analysisDone: true,
                     });
 
                 logger.info(`AI analysis saved for serene session ${doc_id} of user ${uid}`);
@@ -238,7 +239,7 @@ exports.sereneSession = onDocumentWritten(
                     .doc(doc_id)
                     .update({
                         analysedAt: new Date(),
-                        therapyDone: true,
+                        analysisDone: true,
                     });
             }
 
@@ -268,7 +269,7 @@ exports.sereneSession = onDocumentWritten(
 exports.onCheckinCreated = onDocumentCreated(
     {
         document: "Users/{uid}/daily_checkin/{dateKey}",
-        secrets: [geminiApiKey],
+        secrets: [geminiApiKey, qdrantApiKey],
     },
     async (event) => {
         const snap = event.data;
@@ -280,6 +281,26 @@ exports.onCheckinCreated = onDocumentCreated(
         handleCheckinCreated(uid, dateKey, snap.data(), geminiKey)
             .then(() => logger.info(`Qdrant upsert complete for checkin ${dateKey} of user ${uid}`))
             .catch((err) => logger.error(`Qdrant upsert failed for checkin ${dateKey}`, { error: err.message, detail: err.data ?? err.body ?? null }));
+
+        return null;
+    },
+);
+
+exports.onMotivationReflectionCreated = onDocumentCreated(
+    {
+        document: "Users/{uid}/morning_motivation/{dateKey}",
+        secrets: [geminiApiKey, qdrantApiKey],
+    },
+    async (event) => {
+        const snap = event.data;
+        if (!snap || !snap.exists) return null;
+
+        const { uid, dateKey } = event.params;
+        const geminiKey = process.env.GEMINI_SECRET || geminiApiKey.value();
+
+        handleMotivationReflectionCreated(uid, dateKey, snap.data(), geminiKey)
+            .then(() => logger.info(`Qdrant upsert complete for motivation reflection ${dateKey} of user ${uid}`))
+            .catch((err) => logger.error(`Qdrant upsert failed for motivation reflection ${dateKey}`, { error: err.message, detail: err.data ?? err.body ?? null }));
 
         return null;
     },
