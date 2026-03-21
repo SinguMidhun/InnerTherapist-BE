@@ -1,0 +1,6 @@
+{
+  "dependencies": {
+    "@qdrant/js-client-rest": "^1.17.0",
+    "uuid": "^13.0.0"
+  }
+}

@@ -21,17 +21,17 @@
       "port": 5001
     },
     "firestore": {
-      "port": 8080
+      "port": 8083
     },
     "pubsub": {
-      "port": 8087
+      "port": 8082
     },
     "ui": {
       "enabled": true
     },
     "singleProjectMode": true,
     "database": {
-      "port": 9001
+      "port": 9006
     }
   }
 }

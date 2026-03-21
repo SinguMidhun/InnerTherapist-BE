@@ -1,13 +1,16 @@
 require("dotenv").config();
 
-const { onRequest } = require("firebase-functions/https");
-const { onDocumentWritten } = require("firebase-functions/v2/firestore");
+const { onDocumentWritten, onDocumentCreated } = require("firebase-functions/v2/firestore");
 const { defineSecret } = require("firebase-functions/params");
 const logger = require("firebase-functions/logger");
 const { getFirestore } = require("firebase-admin/firestore");
 const { getDatabase } = require("firebase-admin/database");
 const { initializeApp } = require("firebase-admin/app");
 const axios = require("axios");
+const { buildJournalText, handleJournalCreated } = require("./triggers/onJournalCreated");
+const { handleCheckinCreated } = require("./triggers/onCheckinCreated");
+const { handleSessionEnded } = require("./triggers/onSessionEnded");
+const { handleMotivationReflectionCreated } = require("./triggers/onMotivationReflectionCreated");
 
 initializeApp();
 const db = getFirestore();
@@ -17,7 +20,6 @@ const rtdb = getDatabase();
 const geminiApiKey = defineSecret("GEMINI_API_KEY");
 
 const getGeminiUrl = () => {
-    // Falls back to .env variable for local development
     const key = process.env.GEMINI_SECRET || geminiApiKey.value();
     return `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${key}`;
 };
@@ -56,7 +58,7 @@ Respond in JSON format with the following structure:
 async function analyseSereneSessionWithGemini(messages) {
     const conversationText = messages.map(m => `[${m.date}] ${m.sender}: ${m.content}`).join("\n");
     const prompt = `You are a professional therapist analyzing a recent conversation with a user.
-Please read the following conversation log and provide a detailed summary emphasizing the user's behavior and mental health patterns. Ignore small talk or standard greetings. 
+Please read the following conversation log and provide a detailed summary emphasizing the user's behavior and mental health patterns. Ignore small talk or standard greetings.
 The summary MUST explicitly capture any situations discussed (e.g., going to a movie, party) and people mentioned (e.g., friends, family, colleagues), along with the user's feelings associated with them.
 
 Conversation:
@@ -102,11 +104,12 @@ exports.onJournalCreated = onDocumentWritten(
             return null;
         }
 
-        const journalText = journalData.text || journalData.content || JSON.stringify(journalData);
-
+        const journalText = buildJournalText(journalData);
         logger.info(`New journal created for user: ${uid}, journalId: ${journalId}`);
 
         try {
+            const geminiKey = process.env.GEMINI_SECRET || geminiApiKey.value();
+
             const aiResult = await analyseJournalWithGemini(journalText);
             logger.info("Gemini analysis received", { aiResult });
 
@@ -124,6 +127,11 @@ exports.onJournalCreated = onDocumentWritten(
                 });
 
             logger.info(`AI analysis saved for journal ${journalId} of user ${uid}`);
+
+            // Fire-and-forget: never blocks journal analysis
+            handleJournalCreated(uid, journalId, journalData, journalText, geminiKey)
+                .then(() => logger.info(`Qdrant upsert complete for journal ${journalId}`))
+                .catch((err) => logger.error(`Qdrant upsert failed for journal ${journalId}`, { error: err.message, detail: err.data ?? err.body ?? null }));
         } catch (error) {
             logger.error("Error calling Gemini API", {
                 error: error.message,
@@ -155,6 +163,7 @@ exports.sereneSession = onDocumentWritten(
             return null;
         }
 
+        const before = event.data.before?.data();
         const sessionData = snapshot.data();
 
         if (sessionData.therapyDone) {
@@ -167,7 +176,7 @@ exports.sereneSession = onDocumentWritten(
             return null;
         }
 
-        if (sessionData.status !== "ended") {
+        if (sessionData.status !== "ended" || before?.status === "ended") {
             return null;
         }
 
@@ -185,8 +194,11 @@ exports.sereneSession = onDocumentWritten(
         logger.info(`Valid serene session ended for user: ${uid}, doc_id: ${doc_id}`);
 
         try {
+            const geminiKey = process.env.GEMINI_SECRET || geminiApiKey.value();
             const messagesRef = rtdb.ref(`/serene_messages/${uid}/${sessionData.id}`);
             const messagesSnapshot = await messagesRef.orderByChild("date").once("value");
+
+            let summary = null;
 
             if (messagesSnapshot.exists()) {
                 const messages = [];
@@ -203,6 +215,7 @@ exports.sereneSession = onDocumentWritten(
 
                 const aiResult = await analyseSereneSessionWithGemini(messages);
                 logger.info("Gemini serene session analysis received", { aiResult });
+                summary = aiResult.summary;
 
                 await db
                     .collection("Users")
@@ -210,7 +223,7 @@ exports.sereneSession = onDocumentWritten(
                     .collection("serene_sessions")
                     .doc(doc_id)
                     .update({
-                        summary: aiResult.summary,
+                        summary,
                         analysedAt: new Date(),
                         therapyDone: true,
                     });
@@ -228,6 +241,11 @@ exports.sereneSession = onDocumentWritten(
                         therapyDone: true,
                     });
             }
+
+            // Fire-and-forget: never blocks session analysis
+            handleSessionEnded(uid, doc_id, { ...sessionData, summary }, geminiKey)
+                .then(() => logger.info(`Qdrant upsert complete for serene session ${doc_id}`))
+                .catch((err) => logger.error(`Qdrant upsert failed for serene session ${doc_id}`, { error: err.message, detail: err.data ?? err.body ?? null }));
         } catch (error) {
             logger.error(`Error processing serene session ${sessionData.id}`, {
                 error: error.message,
@@ -242,6 +260,26 @@ exports.sereneSession = onDocumentWritten(
                     retryCount: (sessionData.retryCount || 0) + 1,
                 });
         }
+
+        return null;
+    },
+);
+
+exports.onCheckinCreated = onDocumentCreated(
+    {
+        document: "Users/{uid}/daily_checkin/{dateKey}",
+        secrets: [geminiApiKey],
+    },
+    async (event) => {
+        const snap = event.data;
+        if (!snap || !snap.exists) return null;
+
+        const { uid, dateKey } = event.params;
+        const geminiKey = process.env.GEMINI_SECRET || geminiApiKey.value();
+
+        handleCheckinCreated(uid, dateKey, snap.data(), geminiKey)
+            .then(() => logger.info(`Qdrant upsert complete for checkin ${dateKey} of user ${uid}`))
+            .catch((err) => logger.error(`Qdrant upsert failed for checkin ${dateKey}`, { error: err.message, detail: err.data ?? err.body ?? null }));
 
         return null;
     },
