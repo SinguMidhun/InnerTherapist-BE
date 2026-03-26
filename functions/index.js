@@ -305,3 +305,12 @@ exports.onMotivationReflectionCreated = onDocumentCreated(
         return null;
     },
 );
+
+// Callable functions
+const { generateSerenePatterns } = require("./callable/generateSerenePatterns");
+const { generateSereneNudge } = require("./callable/generateSereneNudge");
+const { generateSerenePrecontext } = require("./callable/generateSerenePrecontext");
+
+exports.generateSerenePatterns = generateSerenePatterns;
+exports.generateSereneNudge = generateSereneNudge;
+exports.generateSerenePrecontext = generateSerenePrecontext;
