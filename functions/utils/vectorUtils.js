@@ -14,7 +14,8 @@ async function generateEmbedding(text, geminiKey) {
         content: { parts: [{ text }] },
         outputDimensionality: 768,
     });
-    return response.data.embedding.values;
+    const values = response.data.embedding.values;
+    return Array.isArray(values) ? values.map(Number) : values;
 }
 
 function generatePointId(uid, type, sourceId) {
