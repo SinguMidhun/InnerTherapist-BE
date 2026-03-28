@@ -21,11 +21,9 @@ exports.generateSerenePrecontext = onCall(
         try {
             const db = getFirestore();
 
-            // 1. Fetch onboarding profile
             const userDoc = await db.collection("Users").doc(uid).get();
             const onboarding = userDoc.data()?.onboarding || {};
 
-            // 2. Build profile section
             const profileLines = [
                 "USER PROFILE:",
                 `- Name: ${onboarding.name || "Unknown"}`,
@@ -38,7 +36,6 @@ exports.generateSerenePrecontext = onCall(
                 `- Support style preference: ${onboarding.supportStyle || "not specified"}`,
             ];
 
-            // 3. Generate query embedding
             const geminiKey = process.env.GEMINI_SECRET || geminiApiKey.value();
             const sessionContext = request.data?.sessionContext;
             const queryText = sessionContext && sessionContext.trim()
@@ -47,7 +44,6 @@ exports.generateSerenePrecontext = onCall(
 
             const queryEmbedding = await generateEmbedding(queryText, geminiKey);
 
-            // 4. Search Qdrant
             const qdrant = new QdrantClient({
                 url: process.env.QDRANT_URL,
                 apiKey: process.env.LOCAL_QDRANT_API_KEY || qdrantApiKey.value(),
@@ -60,16 +56,16 @@ exports.generateSerenePrecontext = onCall(
                 mustFilters.push({ key: "date", range: { gte: cutoff } });
             }
 
-            const results = await qdrant.search(COLLECTION_NAME, {
-                vector: queryEmbedding,
+            const queryResult = await qdrant.query(COLLECTION_NAME, {
+                query: queryEmbedding,
                 limit: 15,
                 filter: { must: mustFilters },
                 with_payload: true,
             });
+            const results = queryResult.points || [];
 
             logger.info(`Precontext search for user ${uid}, found ${results.length} results`);
 
-            // 5. Assemble precontext string
             const historyLines = ["", "RELEVANT HISTORY (from past sessions, journals, and check-ins):"];
 
             if (results.length === 0) {
